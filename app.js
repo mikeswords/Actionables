@@ -1,13 +1,25 @@
 const APP_CONFIG = window.ACTIONABLES_CONFIG ?? {};
 const APP_NAME = APP_CONFIG.appName || "Actionables";
-const PREVIEW_STORAGE_KEY = "actionables-preview-v1";
-const UI_STORAGE_KEY = "actionables-ui-v1";
+const PREVIEW_STORAGE_KEY = "actionables-preview-v2";
+const UI_STORAGE_KEY = "actionables-ui-v2";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const root = document.querySelector("#appRoot");
 
 const shortDateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",
+});
+
+const monthLabelFormatter = new Intl.DateTimeFormat("en-US", {
+  month: "long",
+  year: "numeric",
+});
+
+const currencyFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
 });
 
 const state = {
@@ -20,6 +32,9 @@ const state = {
   members: [],
   lists: [],
   tasks: [],
+  budgetSettings: null,
+  budgetExpenses: [],
+  activeTab: loadUiPrefs().activeTab || "personal",
   selectedListId: loadUiPrefs().selectedListId || null,
   taskFilter: loadUiPrefs().taskFilter || "open",
   authView: "sign-in",
@@ -66,17 +81,32 @@ async function hydrateDashboard() {
   state.members = dashboard.members;
   state.lists = dashboard.lists;
   state.tasks = dashboard.tasks;
+  state.budgetSettings = dashboard.budgetSettings || null;
+  state.budgetExpenses = dashboard.budgetExpenses || [];
   state.loading = false;
+  normalizeActiveTab();
   normalizeSelection();
   persistUiPrefs();
 }
 
+function normalizeActiveTab() {
+  if (!["personal", "shared", "budget"].includes(state.activeTab)) {
+    state.activeTab = "personal";
+  }
+}
+
 function normalizeSelection() {
-  const accessibleListIds = new Set(state.lists.map((list) => list.id));
-  if (!accessibleListIds.has(state.selectedListId)) {
+  if (state.activeTab === "budget") {
+    return;
+  }
+
+  const scopedLists = getListsForTab(state.activeTab);
+  const scopedListIds = new Set(scopedLists.map((list) => list.id));
+
+  if (!scopedListIds.has(state.selectedListId)) {
     const preferredList =
-      state.lists.find((list) => getOpenTaskCountForList(list.id) > 0) ||
-      state.lists[0] ||
+      scopedLists.find((list) => getOpenTaskCountForList(list.id) > 0) ||
+      scopedLists[0] ||
       null;
     state.selectedListId = preferredList ? preferredList.id : null;
   }
@@ -103,7 +133,7 @@ function renderLoading() {
         <p class="eyebrow">${escapeHtml(APP_NAME)}</p>
         <h1>Open the list. Keep the house moving.</h1>
         <p class="hero-text">
-          Pulling your shared lists into place.
+          Pulling your shared lists and monthly budget into place.
         </p>
       </div>
     </section>
@@ -121,10 +151,10 @@ function renderAuth() {
     <header class="hero">
       <div class="hero-copy">
         <p class="eyebrow">${escapeHtml(APP_NAME)}</p>
-        <h1>Shared lists for the house. Personal lists for everything else.</h1>
+        <h1>Shared lists for the house. Personal lists and budget for the month.</h1>
         <p class="hero-text">
-          Built for groceries, errands, quick pickups, and the small stuff you
-          do not want to text back and forth all week.
+          Built for groceries, quick errands, and one shared money view that both
+          of you can actually keep updated.
         </p>
       </div>
     </header>
@@ -132,7 +162,7 @@ function renderAuth() {
     <section class="banner">
       <div class="banner-copy">
         <span class="mode-chip live">Connected to Supabase</span>
-        <p>Sign in to keep one shared space and one personal lane for each of you.</p>
+        <p>Sign in to keep your personal lists, shared lists, and household budget in sync.</p>
       </div>
     </section>
 
@@ -141,29 +171,29 @@ function renderAuth() {
         <div class="auth-copy">
           <div>
             <p class="panel-kicker">Why it fits</p>
-            <h2>Same feel as the workout tracker, tuned for lists you actually use every week.</h2>
+            <h2>Same feel as the workout tracker, now tuned for list life and the monthly spend.</h2>
           </div>
 
           <div class="mini-grid">
             <article class="mini-card">
-              <p class="mini-label">Private lists</p>
+              <p class="mini-label">Personal lists</p>
               <h4>Your own stops</h4>
-              <p>Keep personal pickups, reminders, and one-off errands out of the shared feed.</p>
+              <p>Keep pickups, reminders, and one-off errands in your lane.</p>
             </article>
             <article class="mini-card">
               <p class="mini-label">Shared lists</p>
               <h4>One house view</h4>
-              <p>Groceries, Target runs, weekend resets, and anything both of you touch.</p>
+              <p>Groceries, Target runs, and weekend resets live in one place for both of you.</p>
             </article>
             <article class="mini-card">
-              <p class="mini-label">Fast capture</p>
-              <h4>Quick to add</h4>
-              <p>Drop in an item, pick a person, and move on without digging through menus.</p>
+              <p class="mini-label">Shared budget</p>
+              <h4>Income and outgoing</h4>
+              <p>Set one monthly income number and track the shared expenses against it.</p>
             </article>
             <article class="mini-card">
-              <p class="mini-label">No backend chores</p>
-              <h4>Browser-first</h4>
-              <p>Supabase handles the account and data layer, so you only have one app to ship.</p>
+              <p class="mini-label">Browser-first</p>
+              <h4>No app store work</h4>
+              <p>Supabase handles auth and sync, so you only maintain one web app.</p>
             </article>
           </div>
 
@@ -174,7 +204,7 @@ function renderAuth() {
             <ol class="setup-list">
               <li>Create one shared space from the account panel.</li>
               <li>Have your wife join with the shared-space code.</li>
-              <li>Start with a grocery list, a house list, and one personal list each.</li>
+              <li>Start with one personal list each, one shared list, and your shared monthly income.</li>
             </ol>
           </div>
         </div>
@@ -233,7 +263,7 @@ function renderAuth() {
           <p class="auth-footnote">
             ${
               isSignIn
-                ? "If your sign-in fails right after signup, check whether Supabase is waiting for email confirmation."
+                ? "If sign-in fails right after signup, Supabase may still be waiting on email confirmation."
                 : "Supabase may send a confirmation email depending on your Auth settings."
             }
           </p>
@@ -247,19 +277,14 @@ function renderAuth() {
 }
 
 function renderDashboard() {
-  const summary = getSummaryMetrics();
-  const selectedList = state.lists.find((list) => list.id === state.selectedListId) || null;
-  const filteredTasks = getVisibleTasks(selectedList);
-  const attention = getAttentionGroups();
-
   return `
     <header class="hero">
       <div class="hero-copy">
         <p class="eyebrow">${escapeHtml(APP_NAME)}</p>
-        <h1>Shared lists for the house. Personal lists for everything else.</h1>
+        <h1>House lists, personal lists, and a simple shared budget.</h1>
         <p class="hero-text">
-          Groceries, errands, weekend pickups, and the little home reminders
-          that are easier to keep in one place.
+          One place for groceries, errands, your own stops, and the month’s
+          outgoing spend.
         </p>
       </div>
 
@@ -286,7 +311,7 @@ function renderDashboard() {
         <p>
           ${
             state.mode === "preview"
-              ? "This demo is seeded with grocery and errand lists so you can feel the app before wiring up hosting."
+              ? "This demo is seeded with personal lists, shared lists, and a simple monthly budget so you can feel the full app."
               : `Signed in as ${escapeHtml(state.user.display_name || state.user.email)}.`
           }
         </p>
@@ -296,320 +321,603 @@ function renderDashboard() {
       </p>
     </section>
 
-    <section class="summary-grid" aria-label="Task summary">
+    ${renderTabStrip()}
+    ${renderCurrentTab()}
+  `;
+}
+
+function renderTabStrip() {
+  return `
+    <section class="tab-strip" aria-label="Workspace tabs">
+      ${renderTabButton("personal", "Personal Lists")}
+      ${renderTabButton("shared", "Shared Lists")}
+      ${renderTabButton("budget", "Budget")}
+    </section>
+  `;
+}
+
+function renderTabButton(tabId, label) {
+  return `
+    <button
+      type="button"
+      class="tab-button ${state.activeTab === tabId ? "active" : ""}"
+      data-action="set-tab"
+      data-tab-id="${escapeAttribute(tabId)}"
+    >
+      ${escapeHtml(label)}
+    </button>
+  `;
+}
+
+function renderCurrentTab() {
+  if (state.activeTab === "shared") {
+    return renderSharedTab();
+  }
+  if (state.activeTab === "budget") {
+    return renderBudgetTab();
+  }
+  return renderPersonalTab();
+}
+
+function renderPersonalTab() {
+  const summary = getTaskSummaryForScope("private");
+  const selectedList = getSelectedListForTab("personal");
+  const filteredTasks = getVisibleTasks(selectedList);
+  const attention = getAttentionGroupsForScope("private");
+
+  return `
+    <section class="summary-grid" aria-label="Personal list summary">
       ${renderSummaryCard("Open tasks", summary.openTasks, summary.openMeta)}
       ${renderSummaryCard("Overdue", summary.overdueTasks, summary.overdueMeta)}
-      ${renderSummaryCard("Private lists", summary.privateLists, summary.privateMeta)}
-      ${renderSummaryCard("Shared lists", summary.sharedLists, summary.sharedMeta)}
+      ${renderSummaryCard("Personal lists", summary.listCount, summary.listMeta)}
+      ${renderSummaryCard("Checked off", summary.completedThisMonth, summary.completedMeta)}
     </section>
 
     <section class="workspace-grid">
-      <section class="panel attention-panel" aria-labelledby="attentionTitle">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">At a glance</p>
-            <h2 id="attentionTitle">What needs a run</h2>
-          </div>
-          <p class="panel-meta">${escapeHtml(summary.attentionMeta)}</p>
-        </div>
+      ${renderListPanel({
+        scope: "private",
+        title: "Your personal lists",
+        meta: summary.panelMeta,
+        createHeading: "Create a personal list",
+        createCopy: "Use this for your own pickups, reminders, and one-off errands.",
+        placeholder: "My stops",
+      })}
+      ${renderTaskDeckPanel({
+        selectedList,
+        filteredTasks,
+        scope: "private",
+        emptyChip: "Personal lists live just for you",
+      })}
+    </section>
 
-        <p class="helper-text">
-          Pick any card below to jump straight into the list that item belongs to.
-        </p>
+    ${renderAttentionPanel({
+      title: "Personal queue",
+      kicker: "At a glance",
+      meta: summary.attentionMeta,
+      helper: "These are the personal items that still need attention.",
+      groups: attention,
+    })}
+  `;
+}
 
-        <div class="attention-grid">
-          <section class="subpanel">
-            <div class="section-heading">
-              <h3>Overdue</h3>
-              <span class="chip">${attention.overdue.length}</span>
-            </div>
-            <div class="attention-list">
-              ${renderAttentionCards(attention.overdue, "Nothing overdue right now.")}
-            </div>
-          </section>
+function renderSharedTab() {
+  const summary = getTaskSummaryForScope("shared");
+  const selectedList = getSelectedListForTab("shared");
+  const filteredTasks = getVisibleTasks(selectedList);
+  const attention = getAttentionGroupsForScope("shared");
 
-          <section class="subpanel">
-            <div class="section-heading">
-              <h3>Due today</h3>
-              <span class="chip">${attention.dueToday.length}</span>
-            </div>
-            <div class="attention-list">
-              ${renderAttentionCards(attention.dueToday, "Nothing due today.")}
-            </div>
-          </section>
+  return `
+    <section class="summary-grid" aria-label="Shared list summary">
+      ${renderSummaryCard("Open tasks", summary.openTasks, summary.openMeta)}
+      ${renderSummaryCard("Due today", summary.dueToday, summary.dueTodayMeta)}
+      ${renderSummaryCard("Shared lists", summary.listCount, summary.listMeta)}
+      ${renderSummaryCard("Members", state.household ? state.members.length : 0, state.household ? "Everyone in the shared space." : "Create the space first.")}
+    </section>
 
-          <section class="subpanel">
-            <div class="section-heading">
-              <h3>Recently checked off</h3>
-              <span class="chip">${attention.recentDone.length}</span>
-            </div>
-            <div class="attention-list">
-              ${renderAttentionCards(attention.recentDone, "No completed items yet.", { doneView: true })}
-            </div>
-          </section>
-        </div>
-      </section>
-
-      <section class="panel detail-panel" aria-labelledby="detailTitle">
-        <div class="panel-header detail-header">
-          <div>
-            <p class="panel-kicker">Task deck</p>
-            <div class="detail-title-row">
-              <h2 id="detailTitle">${escapeHtml(selectedList ? selectedList.name : "Pick a list")}</h2>
-              ${
-                selectedList
-                  ? `<span class="scope-chip">${selectedList.scope === "shared" ? "Shared" : "Private"}</span>`
-                  : ""
-              }
-            </div>
-            <div class="list-context">
-              ${
-                selectedList
-                  ? `
-                    <span class="chip">Open ${getOpenTaskCountForList(selectedList.id)}</span>
-                    <span class="chip">Done ${getDoneTaskCountForList(selectedList.id)}</span>
-                    <span class="chip">${selectedList.scope === "shared" ? householdName() : "Just for you"}</span>
-                  `
-                  : `<span class="chip">Create your first list below</span>`
-              }
-            </div>
-          </div>
-          <select id="taskFilterSelect" class="select-inline" aria-label="Task filter">
-            <option value="open" ${state.taskFilter === "open" ? "selected" : ""}>Open only</option>
-            <option value="all" ${state.taskFilter === "all" ? "selected" : ""}>All tasks</option>
-            <option value="done" ${state.taskFilter === "done" ? "selected" : ""}>Done only</option>
-          </select>
-        </div>
-
-        ${
-          selectedList
-            ? `
-              <section class="subpanel">
-                <div class="section-heading">
-                  <h3>Add a task</h3>
-                  <p class="section-meta">Quick add into the selected list.</p>
-                </div>
-                <form id="taskForm" class="form-stack">
-                  <label class="field">
-                    <span>Task title</span>
-                    <input name="title" type="text" maxlength="160" placeholder="Grab eggs, avocados, and coffee" required />
-                  </label>
-                  <div class="form-row">
-                    <label class="field">
-                      <span>Due date</span>
-                      <input name="dueDate" type="date" />
-                    </label>
-                    <label class="field">
-                      <span>Assigned to</span>
-                      <select name="assignedUserId">
-                        ${renderAssigneeOptions(selectedList)}
-                      </select>
-                    </label>
-                  </div>
-                  <label class="field">
-                    <span>Notes</span>
-                    <textarea
-                      name="notes"
-                      rows="3"
-                      placeholder="Store, aisle, brand, pickup note, or anything else..."
-                    ></textarea>
-                  </label>
-                  <div class="form-actions">
-                    <button class="button button-primary" type="submit">Add task</button>
-                  </div>
-                </form>
-              </section>
-            `
-            : `
-              <section class="subpanel">
-                <div class="empty-state">
-                  Create a list first. Once you do, this panel becomes your quick-add task deck.
-                </div>
-              </section>
-            `
-        }
-
-        <section class="subpanel">
-          <div class="section-heading">
-            <h3>Tasks</h3>
-            <p class="section-meta">
-              ${
-                selectedList
-                  ? `${filteredTasks.length} visible ${filteredTasks.length === 1 ? "task" : "tasks"} in this view`
-                  : "No list selected"
-              }
-            </p>
-          </div>
-          <div class="task-list">
-            ${renderTaskCards(filteredTasks, selectedList)}
-          </div>
-        </section>
-      </section>
+    <section class="workspace-grid">
+      ${renderListPanel({
+        scope: "shared",
+        title: state.household ? `${householdName()} lists` : "Shared lists",
+        meta: state.household
+          ? "Visible to both accounts."
+          : "Create or join the shared space before you make shared lists.",
+        createHeading: "Create a shared list",
+        createCopy: "Use this for groceries, house resets, and anything both of you touch.",
+        placeholder: "Weekly groceries",
+      })}
+      ${renderTaskDeckPanel({
+        selectedList,
+        filteredTasks,
+        scope: "shared",
+        emptyChip: state.household ? householdName() : "Shared space not connected yet",
+      })}
     </section>
 
     <section class="support-grid">
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Your lists</p>
-            <h2>Your spaces</h2>
-          </div>
-          <p class="panel-meta">${escapeHtml(summary.listMeta)}</p>
-        </div>
+      ${renderAttentionPanel({
+        title: "Shared queue",
+        kicker: "At a glance",
+        meta: summary.attentionMeta,
+        helper: "Pick any card to jump into the shared list it belongs to.",
+        groups: attention,
+      })}
+      ${renderHouseholdPanel({ showChecklist: true })}
+    </section>
+  `;
+}
 
-        <div class="list-strip">
-          <div>
-            <div class="list-strip-header">
-              <h3>Private lists</h3>
-              <span class="chip">${summary.privateLists}</span>
-            </div>
-            <div class="list-grid">
-              ${renderListCards("private")}
-            </div>
-          </div>
+function renderBudgetTab() {
+  const summary = getBudgetSummary();
+  const currentMonthExpenses = getCurrentMonthBudgetExpenses();
 
-          <div class="stack-divider"></div>
-
-          <div>
-            <div class="list-strip-header">
-              <h3>Shared lists</h3>
-              <span class="chip">${summary.sharedLists}</span>
-            </div>
-            <div class="list-grid">
-              ${renderListCards("shared")}
-            </div>
-          </div>
-
-          <div class="subpanel">
-            <div class="section-heading">
-              <h3>Create a list</h3>
-              <p class="section-meta">
-                Use private for your own stops and shared for anything both of you buy or track.
-              </p>
-            </div>
-            <form id="listForm" class="form-stack">
-              <label class="field">
-                <span>List name</span>
-                <input name="name" type="text" maxlength="80" placeholder="Weekly groceries" required />
-              </label>
-              <div class="form-row">
-                <label class="field">
-                  <span>Scope</span>
-                  <select name="scope">
-                    <option value="private">Private</option>
-                    <option value="shared" ${state.household ? "" : "disabled"}>
-                      Shared ${state.household ? "" : "(needs shared space)"}
-                    </option>
-                  </select>
-                </label>
-                <label class="field">
-                  <span>Accent</span>
-                  <select name="accent">
-                    <option value="terracotta">Terracotta</option>
-                    <option value="forest">Forest</option>
-                    <option value="ocean">Ocean</option>
-                    <option value="sand">Sand</option>
-                    <option value="berry">Berry</option>
-                  </select>
-                </label>
-              </div>
-              <div class="form-actions">
-                <button class="button button-primary" type="submit">Create list</button>
-              </div>
-              <p class="helper-text">
-                ${escapeHtml(state.household ? "Shared lists show up for both accounts." : "Create or join a shared space to unlock shared lists.")}
-              </p>
-            </form>
-          </div>
-        </div>
+  if (!state.household) {
+    return `
+      <section class="summary-grid" aria-label="Budget summary">
+        ${renderSummaryCard("Monthly income", formatCurrency(0), "Turns on after shared setup.")}
+        ${renderSummaryCard("Outgoing", formatCurrency(0), "No shared budget yet.")}
+        ${renderSummaryCard("Left to spend", formatCurrency(0), "Create the shared space first.")}
+        ${renderSummaryCard("Entries", 0, "Nothing tracked yet.")}
       </section>
 
-      <section class="panel" id="setupPanel">
+      <section class="workspace-grid">
+        <section class="panel budget-panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Budget</p>
+              <h2>Connect the shared space first</h2>
+            </div>
+            <p class="panel-meta">The budget is shared between both accounts.</p>
+          </div>
+
+          <div class="empty-state">
+            Create or join the household in the Shared Lists tab first. Once both
+            of you are connected, the Budget tab becomes one shared monthly view.
+          </div>
+        </section>
+
+        ${renderHouseholdPanel({ showChecklist: false })}
+      </section>
+    `;
+  }
+
+  return `
+    <section class="summary-grid" aria-label="Budget summary">
+      ${renderSummaryCard("Monthly income", formatCurrency(summary.income), "The shared income target for this month.")}
+      ${renderSummaryCard("Outgoing", formatCurrency(summary.expenses), "All shared expenses logged this month.")}
+      ${renderSummaryCard("Left to spend", formatCurrency(summary.remaining), summary.remaining >= 0 ? "Still available this month." : "You are over the target.")}
+      ${renderSummaryCard("Entries", summary.expenseCount, summary.expenseCount === 1 ? "One expense logged." : `${summary.expenseCount} expenses logged.`)}
+    </section>
+
+    <section class="workspace-grid">
+      <section class="panel budget-panel">
         <div class="panel-header">
           <div>
-            <p class="panel-kicker">Household</p>
-            <h2>${escapeHtml(state.household ? householdName() : "Set up your shared space")}</h2>
+            <p class="panel-kicker">Budget</p>
+            <h2>${escapeHtml(summary.monthLabel)}</h2>
           </div>
-          <p class="panel-meta">${escapeHtml(state.user.display_name || state.user.email)}</p>
+          <p class="panel-meta">Shared with ${escapeHtml(householdName())}.</p>
+        </div>
+
+        <section class="subpanel">
+          <div class="section-heading">
+            <h3>Set shared income</h3>
+            <p class="section-meta">One monthly number for both accounts.</p>
+          </div>
+          <form id="budgetIncomeForm" class="form-stack">
+            <label class="field">
+              <span>Monthly income</span>
+              <input
+                name="monthlyIncome"
+                type="number"
+                min="0"
+                step="0.01"
+                inputmode="decimal"
+                value="${escapeAttribute(formatNumberInput(summary.income))}"
+                placeholder="5800.00"
+                required
+              />
+            </label>
+            <div class="form-actions">
+              <button class="button button-primary" type="submit">Save income</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="subpanel">
+          <div class="section-heading">
+            <h3>Add outgoing expense</h3>
+            <p class="section-meta">Track the shared spend for this month.</p>
+          </div>
+          <form id="budgetExpenseForm" class="form-stack">
+            <label class="field">
+              <span>Expense name</span>
+              <input name="title" type="text" maxlength="120" placeholder="Rent" required />
+            </label>
+            <div class="form-row">
+              <label class="field">
+                <span>Amount</span>
+                <input name="amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="1200.00" required />
+              </label>
+              <label class="field">
+                <span>Date</span>
+                <input name="expenseDate" type="date" value="${escapeAttribute(todayKey())}" required />
+              </label>
+            </div>
+            <label class="field">
+              <span>Notes</span>
+              <textarea
+                name="notes"
+                rows="3"
+                placeholder="Optional note, account detail, or reminder..."
+              ></textarea>
+            </label>
+            <div class="form-actions">
+              <button class="button button-primary" type="submit">Add expense</button>
+            </div>
+          </form>
+        </section>
+      </section>
+
+      <section class="panel budget-panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Monthly outgoing</p>
+            <h2>${escapeHtml(summary.monthLabel)}</h2>
+          </div>
+          <p class="panel-meta">${escapeHtml(`${currentMonthExpenses.length} ${currentMonthExpenses.length === 1 ? "entry" : "entries"} this month`)}</p>
+        </div>
+
+        <section class="subpanel">
+          <div class="budget-rollup">
+            <div>
+              <p class="mini-label">Remaining</p>
+              <h3>${escapeHtml(formatCurrency(summary.remaining))}</h3>
+            </div>
+            <div class="budget-rollup-meta">
+              <span class="chip">Income ${escapeHtml(formatCurrency(summary.income))}</span>
+              <span class="chip">Outgoing ${escapeHtml(formatCurrency(summary.expenses))}</span>
+            </div>
+          </div>
+        </section>
+
+        <div class="expense-list">
+          ${renderBudgetExpenseCards(currentMonthExpenses)}
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function renderListPanel({ scope, title, meta, createHeading, createCopy, placeholder }) {
+  const lists = getListsForScope(scope);
+  const lockedShared = scope === "shared" && !state.household;
+
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <p class="panel-kicker">${scope === "shared" ? "Shared lists" : "Personal lists"}</p>
+          <h2>${escapeHtml(title)}</h2>
+        </div>
+        <p class="panel-meta">${escapeHtml(meta)}</p>
+      </div>
+
+      <div class="list-strip">
+        <div class="list-grid">
+          ${renderListCards(scope)}
+        </div>
+
+        <div class="subpanel">
+          <div class="section-heading">
+            <h3>${escapeHtml(createHeading)}</h3>
+            <p class="section-meta">${escapeHtml(createCopy)}</p>
+          </div>
+          <form id="listForm" class="form-stack">
+            <input type="hidden" name="scope" value="${escapeAttribute(scope)}" />
+            <label class="field">
+              <span>List name</span>
+              <input
+                name="name"
+                type="text"
+                maxlength="80"
+                placeholder="${escapeAttribute(placeholder)}"
+                ${lockedShared ? "disabled" : ""}
+                required
+              />
+            </label>
+            <label class="field">
+              <span>Accent</span>
+              <select name="accent" ${lockedShared ? "disabled" : ""}>
+                <option value="terracotta">Terracotta</option>
+                <option value="forest">Forest</option>
+                <option value="ocean">Ocean</option>
+                <option value="sand">Sand</option>
+                <option value="berry">Berry</option>
+              </select>
+            </label>
+            <div class="form-actions">
+              <button class="button button-primary" type="submit" ${lockedShared ? "disabled" : ""}>
+                Create list
+              </button>
+            </div>
+            <p class="helper-text">
+              ${
+                scope === "shared"
+                  ? escapeHtml(
+                      state.household
+                        ? "This list will show up for both of you."
+                        : "Create or join the shared space first to unlock shared lists."
+                    )
+                  : "These lists stay in your own personal lane."
+              }
+            </p>
+          </form>
         </div>
 
         ${
-          state.household
-            ? `
-              <div class="code-card">
-                <div>
-                  <p class="mini-label">Join code</p>
-                  <span class="code-value">${escapeHtml(state.household.join_code)}</span>
-                  <p class="code-meta">Use this once on the second account to join the same shared space.</p>
-                </div>
-                ${
-                  state.mode === "preview"
-                    ? ""
-                    : `
-                      <button class="button button-ghost" type="button" data-action="copy-code">
-                        Copy code
-                      </button>
-                    `
-                }
-              </div>
-
-              <div class="section-heading">
-                <h3>Members</h3>
-                <p class="section-meta">Everyone who can see the shared lists.</p>
-              </div>
-              <div class="member-list">
-                ${renderMemberCards()}
-              </div>
-            `
-            : `
-              <div class="support-grid">
-                <section class="subpanel">
-                  <div class="section-heading">
-                    <h3>Create your shared space</h3>
-                    <p class="section-meta">Best for the first account.</p>
-                  </div>
-                  <form id="createHouseholdForm" class="form-stack">
-                    <label class="field">
-                      <span>Household name</span>
-                      <input name="name" type="text" maxlength="80" placeholder="Home Base" required />
-                    </label>
-                    <div class="form-actions">
-                      <button class="button button-primary" type="submit">Create space</button>
-                    </div>
-                  </form>
-                </section>
-                <section class="subpanel">
-                  <div class="section-heading">
-                    <h3>Join with a code</h3>
-                    <p class="section-meta">Best for the second account.</p>
-                  </div>
-                  <form id="joinHouseholdForm" class="form-stack">
-                    <label class="field">
-                      <span>Join code</span>
-                      <input name="joinCode" type="text" maxlength="16" placeholder="ACT-48291" required />
-                    </label>
-                    <div class="form-actions">
-                      <button class="button button-primary" type="submit">Join space</button>
-                    </div>
-                  </form>
-                </section>
-              </div>
-            `
+          lists.length === 0
+            ? `<div class="empty-state">${escapeHtml(
+                scope === "shared" ? "No shared lists yet." : "No personal lists yet."
+              )}</div>`
+            : ""
         }
+      </div>
+    </section>
+  `;
+}
 
-        <div class="subpanel" style="margin-top: 1rem;">
-          <div class="section-heading">
-            <h3>Launch checklist</h3>
-            <p class="section-meta">The only setup you need on your side.</p>
+function renderTaskDeckPanel({ selectedList, filteredTasks, scope, emptyChip }) {
+  return `
+    <section class="panel detail-panel" aria-labelledby="detailTitle">
+      <div class="panel-header detail-header">
+        <div>
+          <p class="panel-kicker">Task deck</p>
+          <div class="detail-title-row">
+            <h2 id="detailTitle">${escapeHtml(selectedList ? selectedList.name : `Pick a ${scope} list`)}</h2>
+            ${
+              selectedList
+                ? `<span class="scope-chip">${selectedList.scope === "shared" ? "Shared" : "Personal"}</span>`
+                : ""
+            }
           </div>
-          <ol class="setup-list">
-            <li>Create a Supabase project and run the included SQL schema.</li>
-            <li>Put your Supabase URL and anon key into <code>config.js</code>.</li>
-            <li>Deploy this folder as its own site on Vercel.</li>
-            <li>Create two accounts, then create or join the shared space once.</li>
-          </ol>
+          <div class="list-context">
+            ${
+              selectedList
+                ? `
+                    <span class="chip">Open ${getOpenTaskCountForList(selectedList.id)}</span>
+                    <span class="chip">Done ${getDoneTaskCountForList(selectedList.id)}</span>
+                    <span class="chip">${escapeHtml(selectedList.scope === "shared" ? householdName() : "Just for you")}</span>
+                  `
+                : `<span class="chip">${escapeHtml(emptyChip)}</span>`
+            }
+          </div>
+        </div>
+        <select id="taskFilterSelect" class="select-inline" aria-label="Task filter">
+          <option value="open" ${state.taskFilter === "open" ? "selected" : ""}>Open only</option>
+          <option value="all" ${state.taskFilter === "all" ? "selected" : ""}>All tasks</option>
+          <option value="done" ${state.taskFilter === "done" ? "selected" : ""}>Done only</option>
+        </select>
+      </div>
+
+      ${
+        selectedList
+          ? `
+            <section class="subpanel">
+              <div class="section-heading">
+                <h3>Add a task</h3>
+                <p class="section-meta">Quick add into the selected list.</p>
+              </div>
+              <form id="taskForm" class="form-stack">
+                <label class="field">
+                  <span>Task title</span>
+                  <input
+                    name="title"
+                    type="text"
+                    maxlength="160"
+                    placeholder="${escapeAttribute(scope === "shared" ? "Grab eggs, avocados, and coffee" : "Pick up dry cleaning")}"
+                    required
+                  />
+                </label>
+                <div class="form-row">
+                  <label class="field">
+                    <span>Due date</span>
+                    <input name="dueDate" type="date" />
+                  </label>
+                  <label class="field">
+                    <span>Assigned to</span>
+                    <select name="assignedUserId">
+                      ${renderAssigneeOptions(selectedList)}
+                    </select>
+                  </label>
+                </div>
+                <label class="field">
+                  <span>Notes</span>
+                  <textarea
+                    name="notes"
+                    rows="3"
+                    placeholder="Store, aisle, pickup note, or anything else..."
+                  ></textarea>
+                </label>
+                <div class="form-actions">
+                  <button class="button button-primary" type="submit">Add task</button>
+                </div>
+              </form>
+            </section>
+          `
+          : `
+            <section class="subpanel">
+              <div class="empty-state">
+                ${escapeHtml(
+                  scope === "shared"
+                    ? "Choose a shared list first. Then this panel becomes your task deck."
+                    : "Choose a personal list first. Then this panel becomes your task deck."
+                )}
+              </div>
+            </section>
+          `
+      }
+
+      <section class="subpanel">
+        <div class="section-heading">
+          <h3>Tasks</h3>
+          <p class="section-meta">
+            ${
+              selectedList
+                ? `${filteredTasks.length} visible ${filteredTasks.length === 1 ? "task" : "tasks"} in this view`
+                : "No list selected"
+            }
+          </p>
+        </div>
+        <div class="task-list">
+          ${renderTaskCards(filteredTasks, selectedList)}
         </div>
       </section>
+    </section>
+  `;
+}
+
+function renderAttentionPanel({ title, kicker, meta, helper, groups }) {
+  return `
+    <section class="panel attention-panel" aria-labelledby="${escapeAttribute(title)}">
+      <div class="panel-header">
+        <div>
+          <p class="panel-kicker">${escapeHtml(kicker)}</p>
+          <h2>${escapeHtml(title)}</h2>
+        </div>
+        <p class="panel-meta">${escapeHtml(meta)}</p>
+      </div>
+
+      <p class="helper-text">${escapeHtml(helper)}</p>
+
+      <div class="attention-grid">
+        <section class="subpanel">
+          <div class="section-heading">
+            <h3>Overdue</h3>
+            <span class="chip">${groups.overdue.length}</span>
+          </div>
+          <div class="attention-list">
+            ${renderAttentionCards(groups.overdue, "Nothing overdue right now.")}
+          </div>
+        </section>
+
+        <section class="subpanel">
+          <div class="section-heading">
+            <h3>Due today</h3>
+            <span class="chip">${groups.dueToday.length}</span>
+          </div>
+          <div class="attention-list">
+            ${renderAttentionCards(groups.dueToday, "Nothing due today.")}
+          </div>
+        </section>
+
+        <section class="subpanel">
+          <div class="section-heading">
+            <h3>Recently checked off</h3>
+            <span class="chip">${groups.recentDone.length}</span>
+          </div>
+          <div class="attention-list">
+            ${renderAttentionCards(groups.recentDone, "No completed items yet.", { doneView: true })}
+          </div>
+        </section>
+      </div>
+    </section>
+  `;
+}
+
+function renderHouseholdPanel({ showChecklist }) {
+  return `
+    <section class="panel" id="setupPanel">
+      <div class="panel-header">
+        <div>
+          <p class="panel-kicker">Household</p>
+          <h2>${escapeHtml(state.household ? householdName() : "Set up your shared space")}</h2>
+        </div>
+        <p class="panel-meta">${escapeHtml(state.user.display_name || state.user.email)}</p>
+      </div>
+
+      ${
+        state.household
+          ? `
+            <div class="code-card">
+              <div>
+                <p class="mini-label">Join code</p>
+                <span class="code-value">${escapeHtml(state.household.join_code)}</span>
+                <p class="code-meta">Use this once on the second account to join the same shared space.</p>
+              </div>
+              ${
+                state.mode === "preview"
+                  ? ""
+                  : `
+                    <button class="button button-ghost" type="button" data-action="copy-code">
+                      Copy code
+                    </button>
+                  `
+              }
+            </div>
+
+            <div class="section-heading">
+              <h3>Members</h3>
+              <p class="section-meta">Everyone who can see the shared lists and budget.</p>
+            </div>
+            <div class="member-list">
+              ${renderMemberCards()}
+            </div>
+          `
+          : `
+            <div class="support-grid">
+              <section class="subpanel">
+                <div class="section-heading">
+                  <h3>Create your shared space</h3>
+                  <p class="section-meta">Best for the first account.</p>
+                </div>
+                <form id="createHouseholdForm" class="form-stack">
+                  <label class="field">
+                    <span>Household name</span>
+                    <input name="name" type="text" maxlength="80" placeholder="Home Base" required />
+                  </label>
+                  <div class="form-actions">
+                    <button class="button button-primary" type="submit">Create space</button>
+                  </div>
+                </form>
+              </section>
+
+              <section class="subpanel">
+                <div class="section-heading">
+                  <h3>Join with a code</h3>
+                  <p class="section-meta">Best for the second account.</p>
+                </div>
+                <form id="joinHouseholdForm" class="form-stack">
+                  <label class="field">
+                    <span>Join code</span>
+                    <input name="joinCode" type="text" maxlength="16" placeholder="ACT-48291" required />
+                  </label>
+                  <div class="form-actions">
+                    <button class="button button-primary" type="submit">Join space</button>
+                  </div>
+                </form>
+              </section>
+            </div>
+          `
+      }
+
+      ${
+        showChecklist
+          ? `
+            <div class="subpanel" style="margin-top: 1rem;">
+              <div class="section-heading">
+                <h3>Launch checklist</h3>
+                <p class="section-meta">The only setup you need on your side.</p>
+              </div>
+              <ol class="setup-list">
+                <li>Create a Supabase project and run the included SQL schema.</li>
+                <li>Put your Supabase URL and public browser key into <code>config.js</code>.</li>
+                <li>Deploy this folder as its own site on Vercel.</li>
+                <li>Create two accounts, then create or join the shared space once.</li>
+              </ol>
+            </div>
+          `
+          : ""
+      }
     </section>
   `;
 }
@@ -662,6 +970,7 @@ function renderAttentionCards(tasks, emptyCopy, options = {}) {
 function renderAssigneeOptions(selectedList) {
   const options =
     selectedList.scope === "shared" && state.members.length > 0 ? state.members : [state.user];
+
   return options
     .map((member) => {
       const isDefault = member.id === state.user.id;
@@ -729,9 +1038,9 @@ function renderTaskCards(tasks, selectedList) {
 }
 
 function renderListCards(scope) {
-  const lists = state.lists.filter((list) => list.scope === scope);
+  const lists = getListsForScope(scope);
   if (lists.length === 0) {
-    return `<div class="empty-state">${scope === "shared" ? "No shared lists yet." : "No private lists yet."}</div>`;
+    return `<div class="empty-state">${scope === "shared" ? "No shared lists yet." : "No personal lists yet."}</div>`;
   }
 
   return lists
@@ -753,7 +1062,7 @@ function renderListCards(scope) {
               <h3>${escapeHtml(list.name)}</h3>
               <p>${escapeHtml(openCount > 0 ? `${openCount} ${openCount === 1 ? "item" : "items"} left` : "Everything on this list is checked off.")}</p>
             </div>
-            <span class="scope-chip">${scope}</span>
+            <span class="scope-chip">${scope === "shared" ? "shared" : "personal"}</span>
           </div>
           <div class="list-card-stats">
             <span class="chip">Open ${openCount}</span>
@@ -781,8 +1090,48 @@ function renderMemberCards() {
           <h4>${escapeHtml(member.display_name || member.email)}</h4>
           <p class="member-meta">${escapeHtml(member.email || "")}</p>
           <div class="list-card-stats" style="margin-top:0.8rem;">
-            <span class="chip">Private lists ${personalLists}</span>
+            <span class="chip">${
+              member.id === state.user.id ? `Personal lists ${personalLists}` : "Personal lists stay private"
+            }</span>
             <span class="chip">${member.id === state.user.id ? "Signed in" : "Shared access"}</span>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderBudgetExpenseCards(expenses) {
+  if (expenses.length === 0) {
+    return `<div class="empty-state">No shared expenses logged for this month yet.</div>`;
+  }
+
+  return expenses
+    .map((expense) => {
+      const creator = getMemberById(expense.created_by_user_id);
+      return `
+        <article class="expense-card">
+          <div class="expense-topline">
+            <div>
+              <p class="mini-label">${escapeHtml(shortDateFormatter.format(parseDateKey(expense.expense_date)))}</p>
+              <h4>${escapeHtml(expense.title)}</h4>
+            </div>
+            <div class="expense-actions">
+              <span class="expense-amount">${escapeHtml(formatCurrency(expense.amount))}</span>
+              <button
+                class="button button-danger"
+                type="button"
+                data-action="delete-budget-expense"
+                data-expense-id="${escapeAttribute(expense.id)}"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+          ${expense.notes ? `<p class="task-notes">${escapeHtml(expense.notes)}</p>` : ""}
+          <div class="task-meta">
+            <span class="chip">${escapeHtml(creator ? creator.display_name || creator.email : "Shared space")}</span>
+            <span class="chip">${escapeHtml(monthLabelFormatter.format(parseDateKey(expense.expense_date)))}</span>
           </div>
         </article>
       `;
@@ -806,8 +1155,21 @@ function handleClick(event) {
     return;
   }
 
+  if (action === "set-tab") {
+    state.activeTab = target.dataset.tabId;
+    normalizeSelection();
+    persistUiPrefs();
+    render();
+    return;
+  }
+
   if (action === "select-list") {
+    const selectedList = state.lists.find((list) => list.id === target.dataset.listId);
+    if (selectedList) {
+      state.activeTab = selectedList.scope === "shared" ? "shared" : "personal";
+    }
     state.selectedListId = target.dataset.listId;
+    normalizeSelection();
     persistUiPrefs();
     render();
     return;
@@ -830,6 +1192,8 @@ function handleClick(event) {
       state.members = [];
       state.lists = [];
       state.tasks = [];
+      state.budgetSettings = null;
+      state.budgetExpenses = [];
       state.message = "";
       state.error = "";
       state.loading = false;
@@ -856,6 +1220,15 @@ function handleClick(event) {
     return;
   }
 
+  if (action === "delete-budget-expense") {
+    runMutation(async () => {
+      await state.adapter.deleteBudgetExpense(target.dataset.expenseId);
+      await hydrateDashboard();
+      state.message = "Expense removed.";
+    });
+    return;
+  }
+
   if (action === "copy-code") {
     runMutation(async () => {
       await navigator.clipboard.writeText(state.household.join_code);
@@ -870,7 +1243,6 @@ function handleChange(event) {
     state.taskFilter = event.target.value;
     persistUiPrefs();
     render();
-    return;
   }
 }
 
@@ -937,9 +1309,13 @@ function handleSubmit(event) {
 
   if (form.id === "listForm") {
     runMutation(async () => {
+      const scope = String(formData.get("scope") || "private");
+      if (scope === "shared" && !state.household) {
+        throw new Error("Create or join the shared space before adding shared lists.");
+      }
       await state.adapter.createList({
         name: String(formData.get("name") || "").trim(),
-        scope: String(formData.get("scope") || "private"),
+        scope,
         accent: String(formData.get("accent") || "terracotta"),
         householdId: state.household?.id || null,
       });
@@ -971,6 +1347,43 @@ function handleSubmit(event) {
     });
     return;
   }
+
+  if (form.id === "budgetIncomeForm") {
+    runMutation(async () => {
+      if (!state.household) {
+        throw new Error("Create or join the shared space first.");
+      }
+      await state.adapter.updateBudgetSettings({
+        householdId: state.household.id,
+        monthlyIncome: parsePositiveAmount(String(formData.get("monthlyIncome") || "0"), true),
+      });
+      await hydrateDashboard();
+      state.message = "Monthly income saved.";
+    });
+    return;
+  }
+
+  if (form.id === "budgetExpenseForm") {
+    runMutation(async () => {
+      if (!state.household) {
+        throw new Error("Create or join the shared space first.");
+      }
+      await state.adapter.createBudgetExpense({
+        householdId: state.household.id,
+        title: String(formData.get("title") || "").trim(),
+        amount: parsePositiveAmount(String(formData.get("amount") || "0")),
+        expenseDate: String(formData.get("expenseDate") || "").trim() || todayKey(),
+        notes: String(formData.get("notes") || "").trim(),
+      });
+      form.reset();
+      const dateInput = form.querySelector('input[name="expenseDate"]');
+      if (dateInput) {
+        dateInput.value = todayKey();
+      }
+      await hydrateDashboard();
+      state.message = "Expense added.";
+    });
+  }
 }
 
 async function runMutation(work) {
@@ -987,13 +1400,34 @@ async function runMutation(work) {
   }
 }
 
-function getSummaryMetrics() {
-  const openTasks = state.tasks.filter((task) => task.status === "open").length;
-  const overdueTasks = state.tasks.filter((task) => task.status === "open" && task.due_date && task.due_date < todayKey()).length;
-  const dueToday = state.tasks.filter((task) => task.status === "open" && task.due_date === todayKey()).length;
-  const privateLists = state.lists.filter((list) => list.scope === "private").length;
-  const sharedLists = state.lists.filter((list) => list.scope === "shared").length;
-  const completedThisMonth = state.tasks.filter(
+function getListsForScope(scope) {
+  return state.lists.filter((list) => list.scope === scope);
+}
+
+function getTasksForScope(scope) {
+  const listIds = new Set(getListsForScope(scope).map((list) => list.id));
+  return state.tasks.filter((task) => listIds.has(task.list_id));
+}
+
+function getSelectedListForTab(tab) {
+  if (tab === "budget") {
+    return null;
+  }
+  const scope = tab === "shared" ? "shared" : "private";
+  return state.lists.find((list) => list.id === state.selectedListId && list.scope === scope) || null;
+}
+
+function getListsForTab(tab) {
+  return getListsForScope(tab === "shared" ? "shared" : "private");
+}
+
+function getTaskSummaryForScope(scope) {
+  const tasks = getTasksForScope(scope);
+  const lists = getListsForScope(scope);
+  const openTasks = tasks.filter((task) => task.status === "open").length;
+  const overdueTasks = tasks.filter((task) => task.status === "open" && task.due_date && task.due_date < todayKey()).length;
+  const dueToday = tasks.filter((task) => task.status === "open" && task.due_date === todayKey()).length;
+  const completedThisMonth = tasks.filter(
     (task) => task.status === "done" && task.completed_at && task.completed_at.slice(0, 7) === todayKey().slice(0, 7)
   ).length;
   const attentionTotal = overdueTasks + dueToday;
@@ -1001,15 +1435,52 @@ function getSummaryMetrics() {
   return {
     openTasks,
     overdueTasks,
-    privateLists,
-    sharedLists,
+    dueToday,
+    listCount: lists.length,
+    completedThisMonth,
     openMeta: openTasks > 0 ? "Still on the board." : "Nothing open right now.",
-    overdueMeta: overdueTasks > 0 ? "Needs a pass today." : "Nothing has slipped.",
-    privateMeta: privateLists > 0 ? "Your side lists." : "Make one just for you.",
-    sharedMeta: sharedLists > 0 ? "Visible to both of you." : "Shared lists unlock after setup.",
+    overdueMeta: overdueTasks > 0 ? "Needs a pass soon." : "Nothing has slipped.",
+    dueTodayMeta: dueToday > 0 ? "Worth handling today." : "Nothing due today.",
+    listMeta: lists.length > 0 ? `${lists.length} in this lane.` : "Create the first one.",
+    completedMeta:
+      completedThisMonth > 0
+        ? `${completedThisMonth} ${completedThisMonth === 1 ? "task" : "tasks"} closed this month.`
+        : "Nothing closed yet this month.",
     attentionMeta: attentionTotal > 0 ? `${attentionTotal} items need attention right now` : "Everything urgent is handled",
-    listMeta: `${completedThisMonth} checked off ${completedThisMonth === 1 ? "item" : "items"} this month`,
+    panelMeta:
+      scope === "shared"
+        ? lists.length > 0
+          ? "Visible to both of you."
+          : "Set up a shared list for groceries, house runs, or weekend resets."
+        : lists.length > 0
+          ? "Only visible to you."
+          : "Good for pickups, reminders, and your own stops.",
   };
+}
+
+function getBudgetSummary() {
+  const income = Number(state.budgetSettings?.monthly_income || 0);
+  const expenses = getCurrentMonthBudgetExpenses().reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+  return {
+    income,
+    expenses,
+    remaining: income - expenses,
+    expenseCount: getCurrentMonthBudgetExpenses().length,
+    monthLabel: monthLabelFormatter.format(new Date()),
+  };
+}
+
+function getCurrentMonthBudgetExpenses() {
+  const monthKey = todayKey().slice(0, 7);
+  return state.budgetExpenses
+    .filter((expense) => String(expense.expense_date || "").slice(0, 7) === monthKey)
+    .sort((a, b) => {
+      const byDate = String(b.expense_date || "").localeCompare(String(a.expense_date || ""));
+      if (byDate !== 0) {
+        return byDate;
+      }
+      return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+    });
 }
 
 function getVisibleTasks(selectedList) {
@@ -1052,16 +1523,17 @@ function getDoneTaskCountForList(listId) {
   return state.tasks.filter((task) => task.list_id === listId && task.status === "done").length;
 }
 
-function getAttentionGroups() {
-  const overdue = state.tasks
+function getAttentionGroupsForScope(scope) {
+  const tasks = getTasksForScope(scope);
+  const overdue = tasks
     .filter((task) => task.status === "open" && task.due_date && task.due_date < todayKey())
     .sort(compareTasks)
     .slice(0, 4);
-  const dueToday = state.tasks
+  const dueToday = tasks
     .filter((task) => task.status === "open" && task.due_date === todayKey())
     .sort(compareTasks)
     .slice(0, 4);
-  const recentDone = state.tasks
+  const recentDone = tasks
     .filter((task) => task.status === "done" && task.completed_at)
     .sort((a, b) => String(b.completed_at || "").localeCompare(String(a.completed_at || "")))
     .slice(0, 4);
@@ -1075,6 +1547,22 @@ function householdName() {
 
 function getMemberById(memberId) {
   return state.members.find((member) => member.id === memberId) || null;
+}
+
+function formatCurrency(value) {
+  return currencyFormatter.format(Number(value || 0));
+}
+
+function formatNumberInput(value) {
+  return Number(value || 0).toFixed(2);
+}
+
+function parsePositiveAmount(rawValue, allowZero = false) {
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed) || parsed < 0 || (!allowZero && parsed <= 0)) {
+    throw new Error(allowZero ? "Enter a valid income amount." : "Enter a valid expense amount.");
+  }
+  return Number(parsed.toFixed(2));
 }
 
 function describeDueDate(dateKey) {
@@ -1105,12 +1593,19 @@ function createPreviewAdapter() {
     async getDashboardData() {
       const preview = loadPreviewData();
       const currentUser = preview.users.find((user) => user.id === preview.currentUserId);
+      const visibleLists = preview.lists.filter(
+        (list) => list.scope === "shared" || list.owner_user_id === preview.currentUserId
+      );
+      const visibleListIds = new Set(visibleLists.map((list) => list.id));
+      const visibleTasks = preview.tasks.filter((task) => visibleListIds.has(task.list_id));
       return {
         user: currentUser,
         household: preview.household,
         members: preview.users,
-        lists: preview.lists,
-        tasks: preview.tasks,
+        lists: visibleLists,
+        tasks: visibleTasks,
+        budgetSettings: preview.budgetSettings,
+        budgetExpenses: preview.budgetExpenses,
       };
     },
     async resetPreview() {
@@ -1177,6 +1672,36 @@ function createPreviewAdapter() {
       preview.tasks = preview.tasks.filter((task) => task.id !== taskId);
       savePreviewData(preview);
     },
+    async updateBudgetSettings({ monthlyIncome }) {
+      const preview = loadPreviewData();
+      preview.budgetSettings = {
+        ...preview.budgetSettings,
+        household_id: preview.household.id,
+        monthly_income: monthlyIncome,
+        updated_at: new Date().toISOString(),
+        updated_by_user_id: preview.currentUserId,
+      };
+      savePreviewData(preview);
+    },
+    async createBudgetExpense({ title, amount, expenseDate, notes }) {
+      const preview = loadPreviewData();
+      preview.budgetExpenses.unshift({
+        id: crypto.randomUUID(),
+        household_id: preview.household.id,
+        title,
+        amount,
+        expense_date: expenseDate,
+        notes,
+        created_by_user_id: preview.currentUserId,
+        created_at: new Date().toISOString(),
+      });
+      savePreviewData(preview);
+    },
+    async deleteBudgetExpense(expenseId) {
+      const preview = loadPreviewData();
+      preview.budgetExpenses = preview.budgetExpenses.filter((expense) => expense.id !== expenseId);
+      savePreviewData(preview);
+    },
   };
 }
 
@@ -1214,10 +1739,13 @@ async function createSupabaseAdapter(config) {
         members: [],
         lists: [],
         tasks: [],
+        budgetSettings: null,
+        budgetExpenses: [],
       };
     }
 
     await ensureProfile(session.user);
+
     const { data: profileRows, error: profileError } = await supabase
       .from("profiles")
       .select("id, email, display_name")
@@ -1226,6 +1754,7 @@ async function createSupabaseAdapter(config) {
     if (profileError) {
       throw profileError;
     }
+
     const user = profileRows?.[0] || {
       id: session.user.id,
       email: session.user.email || "",
@@ -1243,12 +1772,16 @@ async function createSupabaseAdapter(config) {
 
     let household = null;
     let members = [user];
+    let budgetSettings = null;
+    let budgetExpenses = [];
 
     if (membershipRows?.[0]) {
+      const householdId = membershipRows[0].household_id;
+
       const { data: householdRows, error: householdError } = await supabase
         .from("households")
         .select("id, name, join_code, created_by, created_at")
-        .eq("id", membershipRows[0].household_id)
+        .eq("id", householdId)
         .limit(1);
       if (householdError) {
         throw householdError;
@@ -1258,7 +1791,7 @@ async function createSupabaseAdapter(config) {
       const { data: memberRows, error: memberRowsError } = await supabase
         .from("household_members")
         .select("user_id, role")
-        .eq("household_id", membershipRows[0].household_id);
+        .eq("household_id", householdId);
       if (memberRowsError) {
         throw memberRowsError;
       }
@@ -1276,6 +1809,35 @@ async function createSupabaseAdapter(config) {
           .map((memberId) => profiles.find((profile) => profile.id === memberId))
           .filter(Boolean);
       }
+
+      const { data: budgetRows, error: budgetError } = await supabase
+        .from("household_budget_settings")
+        .select("household_id, monthly_income, updated_by_user_id, updated_at")
+        .eq("household_id", householdId)
+        .limit(1);
+      if (budgetError) {
+        throw budgetError;
+      }
+      if (budgetRows?.[0]) {
+        budgetSettings = {
+          ...budgetRows[0],
+          monthly_income: Number(budgetRows[0].monthly_income || 0),
+        };
+      }
+
+      const { data: expenseRows, error: expenseError } = await supabase
+        .from("household_budget_expenses")
+        .select("id, household_id, title, amount, expense_date, notes, created_by_user_id, created_at")
+        .eq("household_id", householdId)
+        .order("expense_date", { ascending: false })
+        .order("created_at", { ascending: false });
+      if (expenseError) {
+        throw expenseError;
+      }
+      budgetExpenses = (expenseRows || []).map((expense) => ({
+        ...expense,
+        amount: Number(expense.amount || 0),
+      }));
     }
 
     const { data: lists, error: listsError } = await supabase
@@ -1308,6 +1870,8 @@ async function createSupabaseAdapter(config) {
       members,
       lists: lists || [],
       tasks,
+      budgetSettings,
+      budgetExpenses,
     };
   }
 
@@ -1409,6 +1973,41 @@ async function createSupabaseAdapter(config) {
         throw error;
       }
     },
+    async updateBudgetSettings({ householdId, monthlyIncome }) {
+      const session = await getSession();
+      const { error } = await supabase.from("household_budget_settings").upsert(
+        {
+          household_id: householdId,
+          monthly_income: monthlyIncome,
+          updated_by_user_id: session.user.id,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "household_id" }
+      );
+      if (error) {
+        throw error;
+      }
+    },
+    async createBudgetExpense({ householdId, title, amount, expenseDate, notes }) {
+      const session = await getSession();
+      const { error } = await supabase.from("household_budget_expenses").insert({
+        household_id: householdId,
+        title,
+        amount,
+        expense_date: expenseDate,
+        notes,
+        created_by_user_id: session.user.id,
+      });
+      if (error) {
+        throw error;
+      }
+    },
+    async deleteBudgetExpense(expenseId) {
+      const { error } = await supabase.from("household_budget_expenses").delete().eq("id", expenseId);
+      if (error) {
+        throw error;
+      }
+    },
   };
 }
 
@@ -1439,6 +2038,8 @@ function loadPreviewData() {
   const tomorrow = dateKey(addDays(parseDateKey(today), 1));
   const threeDaysAgo = dateKey(addDays(parseDateKey(today), -3));
   const sixDaysAgo = dateKey(addDays(parseDateKey(today), -6));
+  const fourDaysAgo = dateKey(addDays(parseDateKey(today), -4));
+  const twoDaysAgo = dateKey(addDays(parseDateKey(today), -2));
 
   const seeded = {
     currentUserId: "preview-you",
@@ -1485,6 +2086,15 @@ function loadPreviewData() {
         accent: "forest",
         household_id: null,
         owner_user_id: "preview-you",
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: "list-private-wife",
+        name: "Her stops",
+        scope: "private",
+        accent: "berry",
+        household_id: null,
+        owner_user_id: "preview-wife",
         created_at: new Date().toISOString(),
       },
     ],
@@ -1549,6 +2159,56 @@ function loadPreviewData() {
         created_at: new Date().toISOString(),
         completed_at: new Date(parseDateKey(sixDaysAgo).getTime() + 15 * 60 * 60 * 1000).toISOString(),
       },
+      {
+        id: "task-6",
+        list_id: "list-private-wife",
+        title: "Return library books",
+        notes: "",
+        status: "open",
+        due_date: twoDaysAgo,
+        assigned_user_id: "preview-wife",
+        created_by_user_id: "preview-wife",
+        created_at: new Date().toISOString(),
+        completed_at: null,
+      },
+    ],
+    budgetSettings: {
+      household_id: "household-preview",
+      monthly_income: 5800,
+      updated_by_user_id: "preview-you",
+      updated_at: new Date().toISOString(),
+    },
+    budgetExpenses: [
+      {
+        id: "expense-1",
+        household_id: "household-preview",
+        title: "Rent",
+        amount: 1850,
+        expense_date: fourDaysAgo,
+        notes: "Main household payment.",
+        created_by_user_id: "preview-you",
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: "expense-2",
+        household_id: "household-preview",
+        title: "Power bill",
+        amount: 142.38,
+        expense_date: yesterday,
+        notes: "",
+        created_by_user_id: "preview-wife",
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: "expense-3",
+        household_id: "household-preview",
+        title: "Groceries",
+        amount: 218.44,
+        expense_date: today,
+        notes: "Costco and produce stand.",
+        created_by_user_id: "preview-you",
+        created_at: new Date().toISOString(),
+      },
     ],
   };
 
@@ -1574,6 +2234,7 @@ function persistUiPrefs() {
   localStorage.setItem(
     UI_STORAGE_KEY,
     JSON.stringify({
+      activeTab: state.activeTab,
       selectedListId: state.selectedListId,
       taskFilter: state.taskFilter,
     })
@@ -1593,10 +2254,6 @@ function dateKey(date) {
 
 function parseDateKey(key) {
   return new Date(`${key}T00:00:00`);
-}
-
-function stripTime(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 function addDays(date, days) {

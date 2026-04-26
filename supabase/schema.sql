@@ -51,12 +51,32 @@ create table if not exists public.tasks (
   created_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.household_budget_settings (
+  household_id uuid primary key references public.households (id) on delete cascade,
+  monthly_income numeric(12, 2) not null default 0 check (monthly_income >= 0),
+  updated_by_user_id uuid not null references public.profiles (id) on delete cascade,
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.household_budget_expenses (
+  id uuid primary key default gen_random_uuid(),
+  household_id uuid not null references public.households (id) on delete cascade,
+  title text not null check (char_length(trim(title)) between 1 and 120),
+  amount numeric(12, 2) not null check (amount > 0),
+  expense_date date not null default current_date,
+  notes text not null default '',
+  created_by_user_id uuid not null references public.profiles (id) on delete cascade,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
 create index if not exists idx_household_members_user_id on public.household_members (user_id);
 create index if not exists idx_lists_owner_user_id on public.lists (owner_user_id);
 create index if not exists idx_lists_household_id on public.lists (household_id);
 create index if not exists idx_tasks_list_id on public.tasks (list_id);
 create index if not exists idx_tasks_due_date on public.tasks (due_date);
 create index if not exists idx_tasks_assigned_user_id on public.tasks (assigned_user_id);
+create index if not exists idx_household_budget_expenses_household_id on public.household_budget_expenses (household_id);
+create index if not exists idx_household_budget_expenses_expense_date on public.household_budget_expenses (expense_date);
 
 create or replace function public.is_household_member(p_household_id uuid)
 returns boolean
@@ -178,6 +198,8 @@ alter table public.households enable row level security;
 alter table public.household_members enable row level security;
 alter table public.lists enable row level security;
 alter table public.tasks enable row level security;
+alter table public.household_budget_settings enable row level security;
+alter table public.household_budget_expenses enable row level security;
 
 drop policy if exists "profiles_select_household" on public.profiles;
 create policy "profiles_select_household"
@@ -302,12 +324,66 @@ for delete
 to authenticated
 using (public.can_access_list(list_id));
 
+drop policy if exists "budget_settings_select_members" on public.household_budget_settings;
+create policy "budget_settings_select_members"
+on public.household_budget_settings
+for select
+to authenticated
+using (public.is_household_member(household_id));
+
+drop policy if exists "budget_settings_insert_members" on public.household_budget_settings;
+create policy "budget_settings_insert_members"
+on public.household_budget_settings
+for insert
+to authenticated
+with check (
+  public.is_household_member(household_id)
+  and updated_by_user_id = auth.uid()
+);
+
+drop policy if exists "budget_settings_update_members" on public.household_budget_settings;
+create policy "budget_settings_update_members"
+on public.household_budget_settings
+for update
+to authenticated
+using (public.is_household_member(household_id))
+with check (
+  public.is_household_member(household_id)
+  and updated_by_user_id = auth.uid()
+);
+
+drop policy if exists "budget_expenses_select_members" on public.household_budget_expenses;
+create policy "budget_expenses_select_members"
+on public.household_budget_expenses
+for select
+to authenticated
+using (public.is_household_member(household_id));
+
+drop policy if exists "budget_expenses_insert_members" on public.household_budget_expenses;
+create policy "budget_expenses_insert_members"
+on public.household_budget_expenses
+for insert
+to authenticated
+with check (
+  public.is_household_member(household_id)
+  and created_by_user_id = auth.uid()
+);
+
+drop policy if exists "budget_expenses_delete_members" on public.household_budget_expenses;
+create policy "budget_expenses_delete_members"
+on public.household_budget_expenses
+for delete
+to authenticated
+using (public.is_household_member(household_id));
+
 grant usage on schema public to authenticated;
 grant select, insert, update on public.profiles to authenticated;
 grant select on public.households to authenticated;
 grant select on public.household_members to authenticated;
 grant select, insert, update, delete on public.lists to authenticated;
 grant select, insert, update, delete on public.tasks to authenticated;
+grant select, insert, update on public.household_budget_settings to authenticated;
+grant select, insert, delete on public.household_budget_expenses to authenticated;
 grant execute on function public.is_household_member(uuid) to authenticated;
 grant execute on function public.share_household_with(uuid) to authenticated;
 grant execute on function public.can_access_list(uuid) to authenticated;
