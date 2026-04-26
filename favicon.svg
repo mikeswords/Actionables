@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Actionables">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f4efe6" />
+      <stop offset="100%" stop-color="#efe5d7" />
+    </linearGradient>
+    <linearGradient id="dot" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e9724c" />
+      <stop offset="100%" stop-color="#d25d38" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="url(#bg)" />
+  <path
+    d="M18 22.5c0-2.5 1.9-4.5 4.4-4.5h19.2c2.4 0 4.4 2 4.4 4.5v19c0 2.5-2 4.5-4.4 4.5H22.4c-2.5 0-4.4-2-4.4-4.5z"
+    fill="none"
+    stroke="#1b4d3e"
+    stroke-width="3.5"
+  />
+  <path d="M25 33.5l5 5 10-12" fill="none" stroke="#1b4d3e" stroke-linecap="round" stroke-linejoin="round" stroke-width="4.2" />
+  <circle cx="45.5" cy="19.5" r="6.5" fill="url(#dot)" />
+</svg>
