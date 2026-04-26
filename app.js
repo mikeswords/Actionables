@@ -118,12 +118,17 @@ function render() {
     return;
   }
 
-  if (state.mode === "live" && !state.user) {
-    root.innerHTML = renderAuth();
-    return;
-  }
+  try {
+    if (state.mode === "live" && !state.user) {
+      root.innerHTML = renderAuth();
+      return;
+    }
 
-  root.innerHTML = renderDashboard();
+    root.innerHTML = renderDashboard();
+  } catch (error) {
+    console.error("Render failure", error);
+    root.innerHTML = renderFatalError(error);
+  }
 }
 
 function renderLoading() {
@@ -141,6 +146,25 @@ function renderLoading() {
       <div class="loading-card"></div>
       <div class="loading-card"></div>
       <div class="loading-card"></div>
+    </section>
+  `;
+}
+
+function renderFatalError(error) {
+  return `
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">${escapeHtml(APP_NAME)}</p>
+        <h1>Something tripped during render.</h1>
+        <p class="hero-text">
+          ${escapeHtml(getErrorMessage(error))}
+        </p>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="empty-state">
+        Refresh once. If it keeps happening, this message helps us pinpoint the exact failing view.
+      </div>
     </section>
   `;
 }
@@ -1109,11 +1133,14 @@ function renderBudgetExpenseCards(expenses) {
   return expenses
     .map((expense) => {
       const creator = getMemberById(expense.created_by_user_id);
+      const expenseDate = parseOptionalDateKey(expense.expense_date);
       return `
         <article class="expense-card">
           <div class="expense-topline">
             <div>
-              <p class="mini-label">${escapeHtml(shortDateFormatter.format(parseDateKey(expense.expense_date)))}</p>
+              <p class="mini-label">${escapeHtml(
+                expenseDate ? shortDateFormatter.format(expenseDate) : "Unknown date"
+              )}</p>
               <h4>${escapeHtml(expense.title)}</h4>
             </div>
             <div class="expense-actions">
@@ -1131,7 +1158,7 @@ function renderBudgetExpenseCards(expenses) {
           ${expense.notes ? `<p class="task-notes">${escapeHtml(expense.notes)}</p>` : ""}
           <div class="task-meta">
             <span class="chip">${escapeHtml(creator ? creator.display_name || creator.email : "Shared space")}</span>
-            <span class="chip">${escapeHtml(monthLabelFormatter.format(parseDateKey(expense.expense_date)))}</span>
+            <span class="chip">${escapeHtml(expenseDate ? monthLabelFormatter.format(expenseDate) : "No month")}</span>
           </div>
         </article>
       `;
@@ -1810,34 +1837,42 @@ async function createSupabaseAdapter(config) {
           .filter(Boolean);
       }
 
-      const { data: budgetRows, error: budgetError } = await supabase
-        .from("household_budget_settings")
-        .select("household_id, monthly_income, updated_by_user_id, updated_at")
-        .eq("household_id", householdId)
-        .limit(1);
-      if (budgetError) {
-        throw budgetError;
-      }
-      if (budgetRows?.[0]) {
-        budgetSettings = {
-          ...budgetRows[0],
-          monthly_income: Number(budgetRows[0].monthly_income || 0),
-        };
+      try {
+        const { data: budgetRows, error: budgetError } = await supabase
+          .from("household_budget_settings")
+          .select("household_id, monthly_income, updated_by_user_id, updated_at")
+          .eq("household_id", householdId)
+          .limit(1);
+        if (budgetError) {
+          throw budgetError;
+        }
+        if (budgetRows?.[0]) {
+          budgetSettings = {
+            ...budgetRows[0],
+            monthly_income: Number(budgetRows[0].monthly_income || 0),
+          };
+        }
+      } catch (error) {
+        console.warn("Budget settings could not be loaded.", error);
       }
 
-      const { data: expenseRows, error: expenseError } = await supabase
-        .from("household_budget_expenses")
-        .select("id, household_id, title, amount, expense_date, notes, created_by_user_id, created_at")
-        .eq("household_id", householdId)
-        .order("expense_date", { ascending: false })
-        .order("created_at", { ascending: false });
-      if (expenseError) {
-        throw expenseError;
+      try {
+        const { data: expenseRows, error: expenseError } = await supabase
+          .from("household_budget_expenses")
+          .select("id, household_id, title, amount, expense_date, notes, created_by_user_id, created_at")
+          .eq("household_id", householdId)
+          .order("expense_date", { ascending: false })
+          .order("created_at", { ascending: false });
+        if (expenseError) {
+          throw expenseError;
+        }
+        budgetExpenses = (expenseRows || []).map((expense) => ({
+          ...expense,
+          amount: Number(expense.amount || 0),
+        }));
+      } catch (error) {
+        console.warn("Budget expenses could not be loaded.", error);
       }
-      budgetExpenses = (expenseRows || []).map((expense) => ({
-        ...expense,
-        amount: Number(expense.amount || 0),
-      }));
     }
 
     const { data: lists, error: listsError } = await supabase
@@ -2254,6 +2289,14 @@ function dateKey(date) {
 
 function parseDateKey(key) {
   return new Date(`${key}T00:00:00`);
+}
+
+function parseOptionalDateKey(key) {
+  if (!key) {
+    return null;
+  }
+  const parsed = new Date(`${key}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function addDays(date, days) {
